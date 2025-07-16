@@ -63,6 +63,13 @@ class MotionDetectionNode(Node):
         self.prev_center = None
         self.last_rectangle = None
         self.last_rectangle_time = 0
+        self.prev_gray = None  # Für Bewegungserkennung
+
+        self.image_pub_motion = self.create_publisher(
+            Image,
+            'motion/motion_mask',
+            10
+        )
 
     def image_callback(self, msg):
         current_time = time.time()
@@ -81,6 +88,32 @@ class MotionDetectionNode(Node):
 
         # Convert to grayscale
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+        # --- Bewegungserkennung (Frame-Differenz) ---
+        motion_mask = None
+        blue_bbox = None
+        if self.prev_gray is not None:
+            diff = cv2.absdiff(gray, self.prev_gray)
+            _, motion_mask = cv2.threshold(diff, 10, 255, cv2.THRESH_BINARY) # Schwellenwert für Bewegungserkennung, 10
+            # Optionale Nachbearbeitung
+            kernel = np.ones((5, 5), np.uint8)
+            motion_mask = cv2.morphologyEx(motion_mask, cv2.MORPH_OPEN, kernel, iterations=1)
+            # Suche nach größtem Bereich in der Bewegungsmaske (unabhängig von Rechteckform)
+            contours_motion, _ = cv2.findContours(motion_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            max_area = 0
+            for cnt in contours_motion:
+                area = cv2.contourArea(cnt)
+                if area < 80:
+                    continue
+                x, y, w, h = cv2.boundingRect(cnt)
+                if area > max_area:
+                    max_area = area
+                    blue_bbox = (x, y, w, h)
+            # Zeichne blaue Bounding Box ins Farbbild (deaktiviert)
+            # if blue_bbox is not None:
+            #     bx, by, bw, bh = blue_bbox
+            #     cv2.rectangle(frame, (bx, by), (bx+bw, by+bh), (255, 0, 0), 2)
+        self.prev_gray = gray.copy()
 
 
         # --- Dynamisches Thresholding auskommentiert ---
