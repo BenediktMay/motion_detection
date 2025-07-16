@@ -104,7 +104,7 @@ class MotionDetectionNode(Node):
         #         binary = binary_dyn if white_dyn > white_otsu else binary_otsu
 
         # --- Statisches Thresholding ---
-        static_thresh = 80  # <<--- HIER festen Wert anpassen
+        static_thresh = 70  # <<--- HIER festen Wert anpassen
         self.get_logger().info(f"Static threshold used: {static_thresh}")
         _, binary = cv2.threshold(gray, static_thresh, 255, cv2.THRESH_BINARY_INV)
 
@@ -179,7 +179,7 @@ class MotionDetectionNode(Node):
             self.last_rectangle_time = current_time
             object_detected = True
         # Wenn kein Rechteck erkannt, aber noch in Cooldown (0.5s), verwende das letzte
-        elif self.last_rectangle is not None and (current_time - self.last_rectangle_time) < 0.5:
+        elif self.last_rectangle is not None and (current_time - self.last_rectangle_time) < 1:
             best_bbox = self.last_rectangle
             best_center = self.last_center
             object_detected = True
@@ -191,7 +191,7 @@ class MotionDetectionNode(Node):
             best_center = None
             object_detected = False
 
-        # Zeichne einstellbares grünes Rechteck um den Mittelpunkt, Tracking-Linie bleibt
+        # Zeichne nur das einstellbare grüne Rechteck um den Mittelpunkt (ohne Tracking-Linie)
         if object_detected and best_bbox is not None:
             x, y, w, h = best_bbox
             x1 = int(best_center[0] - self.rect_width // 2)
@@ -199,8 +199,6 @@ class MotionDetectionNode(Node):
             x2 = int(best_center[0] + self.rect_width // 2)
             y2 = int(best_center[1] + self.rect_height // 2)
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), thickness=self.rect_thickness)
-            if self.prev_center is not None and best_center is not None:
-                cv2.line(frame, self.prev_center, best_center, (255, 0, 0), 2)
             self.prev_center = best_center
             self.get_logger().info(f"Black object detected, area: {best_area}, center: {best_center}")
         else:
