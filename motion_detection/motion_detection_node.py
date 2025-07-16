@@ -11,16 +11,25 @@ from sensor_msgs.msg import Image
 
 class MotionDetectionNode(Node):
     def __init__(self):
+        super().__init__('motiondetectionnode')
         # Parameter für Rechteckgröße (händisch im Code änderbar)
         self.rect_width = 40   # Breite des grünen Rechtecks
         self.rect_height = 40  # Höhe des grünen Rechtecks
         self.rect_thickness = 4  # Dicke des grünen Rahmens
 
-        # Offset für dynamischen Threshold (händisch anpassbar)
-        self.dynamic_threshold_offset = 20
+        # Offset für dynamischen Threshold (jetzt als ROS-Parameter)
+        self.declare_parameter('dynamic_threshold_offset', 50.0)
+        self.dynamic_threshold_offset = self.get_parameter('dynamic_threshold_offset').get_parameter_value().double_value
+
+        # Obergrenze für dynamischen Threshold (jetzt als ROS-Parameter)
+        self.declare_parameter('dynamic_threshold_max', 120.0) #standardwert 120.0
+        self.dynamic_threshold_max = self.get_parameter('dynamic_threshold_max').get_parameter_value().double_value
+
+        # Statischer Threshold als ROS-Parameter
+        self.declare_parameter('static_threshold', 60.0) # Standardwert 60.0
+        self.static_threshold = self.get_parameter('static_threshold').get_parameter_value().double_value
         # Mindestfläche (Pixelanzahl) für "dunkelste Region" (händisch anpassbar)
         self.min_dark_area = 300
-        super().__init__('motiondetectionnode')
 
         self.bridge = CvBridge()
 
@@ -86,19 +95,23 @@ class MotionDetectionNode(Node):
             self.get_logger().error("Can't read frame")
             return
 
+
         # Convert to grayscale
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+        # Parameter zur Laufzeit auslesen (damit Änderungen sofort wirken)
+        self.dynamic_threshold_offset = self.get_parameter('dynamic_threshold_offset').get_parameter_value().double_value
+        self.dynamic_threshold_max = self.get_parameter('dynamic_threshold_max').get_parameter_value().double_value
+        self.static_threshold = self.get_parameter('static_threshold').get_parameter_value().double_value
 
         # --- Bewegungserkennung (Frame-Differenz) ---
         motion_mask = None
         blue_bbox = None
         if self.prev_gray is not None:
             diff = cv2.absdiff(gray, self.prev_gray)
-            _, motion_mask = cv2.threshold(diff, 10, 255, cv2.THRESH_BINARY) # Schwellenwert für Bewegungserkennung, 10
-            # Optionale Nachbearbeitung
+            _, motion_mask = cv2.threshold(diff, 10, 255, cv2.THRESH_BINARY)
             kernel = np.ones((5, 5), np.uint8)
             motion_mask = cv2.morphologyEx(motion_mask, cv2.MORPH_OPEN, kernel, iterations=1)
-            # Suche nach größtem Bereich in der Bewegungsmaske (unabhängig von Rechteckform)
             contours_motion, _ = cv2.findContours(motion_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             max_area = 0
             for cnt in contours_motion:
@@ -116,11 +129,16 @@ class MotionDetectionNode(Node):
         self.prev_gray = gray.copy()
 
 
-        # --- Dynamisches Thresholding auskommentiert ---
-        # perc5_gray = np.percentile(gray, 5)
+        # --- Statisches Thresholding ---
+        static_thresh = self.static_threshold
+        self.get_logger().info(f"Static threshold used: {static_thresh}")
+        _, binary = cv2.threshold(gray, static_thresh, 255, cv2.THRESH_BINARY_INV)
+
+        # --- Dynamisches Thresholding (optional, auskommentiert) ---
+        # perc5_gray = np.percentile(gray, 4)
         # dynamic_thresh = perc5_gray + self.dynamic_threshold_offset
-        # dynamic_thresh = np.clip(dynamic_thresh, 0, 150)
-        # self.get_logger().info(f"Dynamic threshold used: {dynamic_thresh:.2f} (5%-percentile: {perc5_gray:.2f})")
+        # dynamic_thresh = np.clip(dynamic_thresh, 0, self.dynamic_threshold_max)
+        # self.get_logger().info(f"Dynamic threshold used: {dynamic_thresh:.2f} (5%-percentile: {perc5_gray:.2f}), max: {self.dynamic_threshold_max}")
         # _, binary_dyn = cv2.threshold(gray, dynamic_thresh, 255, cv2.THRESH_BINARY_INV)
         # _, binary_otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
         # white_dyn = np.count_nonzero(binary_dyn)
@@ -135,11 +153,6 @@ class MotionDetectionNode(Node):
         #         binary = binary_otsu
         #     else:
         #         binary = binary_dyn if white_dyn > white_otsu else binary_otsu
-
-        # --- Statisches Thresholding ---
-        static_thresh = 70  # <<--- HIER festen Wert anpassen
-        self.get_logger().info(f"Static threshold used: {static_thresh}")
-        _, binary = cv2.threshold(gray, static_thresh, 255, cv2.THRESH_BINARY_INV)
 
         # Morphologische Operationen
         kernel = np.ones((5, 5), np.uint8)
