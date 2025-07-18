@@ -80,9 +80,33 @@ class MotionDetectionNode(Node):
             10
         )
 
+        # Logging flags
+        self.no_image_logged = False
+        self.image_received_logged = False
+
+        self.get_logger().info("MotionDetectionNode successfully started and running.")
+
+        # Timer to check for image timeout
+        self.image_timeout_sec = 5  # Zeit ohne Bild bis Log kommt
+        self.create_timer(1.0, self.check_image_timeout)
+
+    def check_image_timeout(self):
+        # Prüfe, ob seit längerem kein Bild kam
+        if (time.time() - self.last_time) > self.image_timeout_sec:
+            if not self.no_image_logged:
+                self.get_logger().warn("No new images received for a while!")
+                self.no_image_logged = True
+                self.image_received_logged = False
+
     def image_callback(self, msg):
         current_time = time.time()
         time_diff = current_time - self.last_time
+
+        # Log wenn nach Pause wieder ein Bild kommt
+        if self.no_image_logged and not self.image_received_logged:
+            self.get_logger().info("Images are being received again.")
+            self.image_received_logged = True
+            self.no_image_logged = False
 
         if time_diff < 1 / self.framerate:
             return
@@ -131,7 +155,7 @@ class MotionDetectionNode(Node):
 
         # --- Statisches Thresholding ---
         static_thresh = self.static_threshold
-        self.get_logger().info(f"Static threshold used: {static_thresh}")
+        #self.get_logger().info(f"Static threshold used: {static_thresh}")
         _, binary = cv2.threshold(gray, static_thresh, 255, cv2.THRESH_BINARY_INV)
 
         # Morphologische Operationen
@@ -243,9 +267,9 @@ class MotionDetectionNode(Node):
             if all(in_circle(pt) for pt in rect_corners):
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), thickness=self.rect_thickness)
             self.prev_center = best_center
-            self.get_logger().info(f"Black object detected, area: {best_area}, center: {best_center}")
+            self.get_logger().info(f"motion detected!")
         else:
-            self.get_logger().debug("No black object detected")
+            self.get_logger().debug("No motion detected")
 
         # Draw the circle also on the output image
         cv2.circle(frame, center, radius, (0, 0, 255), thickness=2)
