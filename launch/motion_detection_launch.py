@@ -17,7 +17,7 @@ def generate_launch_description():
                 {'cooldown_frames':10},
             ],
             remappings=[
-                ('image_in','/camera1/image_raw'),
+                ('image_in','/camera/color/image_raw'), #/camera1/image_raw' for testing with usb camera
                 ('depth_in', '/camera/depth/image_raw')
             ]
         )
