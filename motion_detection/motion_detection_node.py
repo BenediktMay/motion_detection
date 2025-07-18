@@ -26,7 +26,7 @@ class MotionDetectionNode(Node):
         self.dynamic_threshold_max = self.get_parameter('dynamic_threshold_max').get_parameter_value().double_value
 
         # Statischer Threshold als ROS-Parameter
-        self.declare_parameter('static_threshold', 60.0) # Standardwert 60.0
+        self.declare_parameter('static_threshold', 68.0) # Standardwert 60.0
         self.static_threshold = self.get_parameter('static_threshold').get_parameter_value().double_value
         # Mindestfläche (Pixelanzahl) für "dunkelste Region" (händisch anpassbar)
         self.min_dark_area = 300
@@ -134,32 +134,12 @@ class MotionDetectionNode(Node):
         self.get_logger().info(f"Static threshold used: {static_thresh}")
         _, binary = cv2.threshold(gray, static_thresh, 255, cv2.THRESH_BINARY_INV)
 
-        # --- Dynamisches Thresholding (optional, auskommentiert) ---
-        # perc5_gray = np.percentile(gray, 4)
-        # dynamic_thresh = perc5_gray + self.dynamic_threshold_offset
-        # dynamic_thresh = np.clip(dynamic_thresh, 0, self.dynamic_threshold_max)
-        # self.get_logger().info(f"Dynamic threshold used: {dynamic_thresh:.2f} (5%-percentile: {perc5_gray:.2f}), max: {self.dynamic_threshold_max}")
-        # _, binary_dyn = cv2.threshold(gray, dynamic_thresh, 255, cv2.THRESH_BINARY_INV)
-        # _, binary_otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-        # white_dyn = np.count_nonzero(binary_dyn)
-        # white_otsu = np.count_nonzero(binary_otsu)
-        # max_white = int(0.6 * binary_dyn.size)
-        # if 100 < white_dyn < max_white and white_dyn >= white_otsu:
-        #     binary = binary_dyn
-        # elif 100 < white_otsu < max_white:
-        #     binary = binary_otsu
-        # else:
-        #     if white_dyn >= max_white:
-        #         binary = binary_otsu
-        #     else:
-        #         binary = binary_dyn if white_dyn > white_otsu else binary_otsu
-
         # Morphologische Operationen
         kernel = np.ones((5, 5), np.uint8)
         dilated = cv2.dilate(binary, kernel, iterations=1)
         closed = cv2.morphologyEx(dilated, cv2.MORPH_CLOSE, kernel, iterations=2)
 
-        # Konturen finden
+        # Konturen finden und Rechteck suchen wie gehabt
         contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         best_contour = None
@@ -210,8 +190,20 @@ class MotionDetectionNode(Node):
         if best_contour is not None:
             cv2.drawContours(binary_for_publish, [best_contour], -1, 255, thickness=cv2.FILLED)
 
-        # Publish the binary image
-        binary_msg = self.bridge.cv2_to_imgmsg(binary_for_publish, encoding='mono8')
+        # --- Mask everything outside a center circle (erst jetzt) ---
+        height, width = binary_for_publish.shape
+        center = (width // 2, height // 2)
+        radius = min(width, height) // 3
+        mask = np.ones_like(binary_for_publish, dtype=np.uint8) * 255
+        cv2.circle(mask, center, radius, 0, thickness=-1)
+        binary_for_publish[mask == 255] = 255
+
+        # Visualize: draw the circle on the binary image (optional)
+        vis_binary = cv2.cvtColor(binary_for_publish, cv2.COLOR_GRAY2BGR)
+        cv2.circle(vis_binary, center, radius, (0, 0, 255), thickness=2)
+
+        # Publish the binary image (masked and visualized)
+        binary_msg = self.bridge.cv2_to_imgmsg(vis_binary, encoding='bgr8')
         self.image_pub_binary.publish(binary_msg)
 
         # Track and draw the object
@@ -225,7 +217,7 @@ class MotionDetectionNode(Node):
             self.last_rectangle_time = current_time
             object_detected = True
         # Wenn kein Rechteck erkannt, aber noch in Cooldown (0.5s), verwende das letzte
-        elif self.last_rectangle is not None and (current_time - self.last_rectangle_time) < 1:
+        elif self.last_rectangle is not None and (current_time - self.last_rectangle_time) < 2:
             best_bbox = self.last_rectangle
             best_center = self.last_center
             object_detected = True
@@ -244,11 +236,19 @@ class MotionDetectionNode(Node):
             y1 = int(best_center[1] - self.rect_height // 2)
             x2 = int(best_center[0] + self.rect_width // 2)
             y2 = int(best_center[1] + self.rect_height // 2)
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), thickness=self.rect_thickness)
+            # Prüfe, ob alle vier Ecken im Kreis liegen
+            rect_corners = [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
+            def in_circle(pt):
+                return (pt[0] - center[0])**2 + (pt[1] - center[1])**2 <= radius**2
+            if all(in_circle(pt) for pt in rect_corners):
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), thickness=self.rect_thickness)
             self.prev_center = best_center
             self.get_logger().info(f"Black object detected, area: {best_area}, center: {best_center}")
         else:
             self.get_logger().debug("No black object detected")
+
+        # Draw the circle also on the output image
+        cv2.circle(frame, center, radius, (0, 0, 255), thickness=2)
 
         # Publish the processed frame with overlay
         processed_msg = self.bridge.cv2_to_imgmsg(frame, encoding='bgr8')
